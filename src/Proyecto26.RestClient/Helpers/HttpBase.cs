@@ -6,8 +6,10 @@ using Proyecto26.Common;
 
 namespace Proyecto26
 {
-    public static class HttpBaseNonBlocking
+    public static class HttpBase
     {
+        private const int HTTP_NO_CONTENT = 204;
+
         public static IEnumerator CreateRequestAndRetry(RequestHelper options, Action<RequestException, ResponseHelper> callback)
         {
             var retries = 0;
@@ -92,6 +94,15 @@ namespace Proyecto26
             IsHttpError = request.isHttpError;
 #endif
             return new RequestException(options, request.error, IsHttpError, IsNetworkError, request.responseCode, options.ParseResponseBody ? request.downloadHandler.text : "body not parsed");
+        }
+
+        private static bool IsNetworkError(UnityWebRequest request)
+        {
+#if UNITY_2020_2_OR_NEWER
+            return request.result == UnityWebRequest.Result.ConnectionError;
+#else
+            return request.isNetworkError;
+#endif
         }
 
         public static void DebugLog(bool debugEnabled, object message, bool isError)
