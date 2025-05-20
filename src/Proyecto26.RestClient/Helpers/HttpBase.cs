@@ -6,68 +6,64 @@ using Proyecto26.Common;
 
 namespace Proyecto26
 {
-    public static class HttpBase
+    public static class HttpBaseNonBlocking
     {
-        private const int HTTP_NO_CONTENT = 204;
-
         public static IEnumerator CreateRequestAndRetry(RequestHelper options, Action<RequestException, ResponseHelper> callback)
         {
-
             var retries = 0;
             do
             {
                 using (var request = CreateRequest(options))
                 {
-                    bool IsNetworkError;
-#if UNITY_2020_2_OR_NEWER
-                    IsNetworkError = (request.result == UnityWebRequest.Result.ConnectionError);
-#else
-                    IsNetworkError = request.isNetworkError;
-#endif
-                    var sendRequest = request.SendWebRequestWithOptions(options);
-                    if (options.ProgressCallback == null)
-                    {
-                        yield return sendRequest;
-                    }
-                    else
-                    {
-                        options.ProgressCallback(0);
+                    // send + drive the request non‑blockingly, frame by frame
+                    yield return SendUnityWebRequestCoroutine(request, options);
 
-                        while (!sendRequest.isDone)
-                        {
-                            options.ProgressCallback(sendRequest.progress);
-                            yield return null;
-                        }
-
-                        options.ProgressCallback(1);
-                    }
+                    // now build the response as before
                     var response = request.CreateWebResponse();
+
                     if (request.IsValidRequest(options))
                     {
-                        DebugLog(options.EnableDebug, string.Format("RestClient - Response\nUrl: {0}\nMethod: {1}\nStatus: {2}\nResponse: {3}", options.Uri, options.Method, request.responseCode, options.ParseResponseBody ? response.Text : "body not parsed"), false);
+                        DebugLog(options.EnableDebug,
+                                 $"RestClient - Response\nUrl: {options.Uri}\nMethod: {options.Method}\nStatus: {request.responseCode}\nResponse: {(options.ParseResponseBody ? response.Text : "body not parsed")}",
+                                 false);
                         callback(null, response);
-                        break;
+                        yield break;
                     }
-                    else if (!options.IsAborted && retries < options.Retries && (!options.RetryCallbackOnlyOnNetworkErrors || IsNetworkError))
+                    else if (!options.IsAborted
+                             && retries < options.Retries
+                             && (!options.RetryCallbackOnlyOnNetworkErrors || IsNetworkError(request)))
                     {
-                        if (options.RetryCallback != null)
-                        {
-                            options.RetryCallback(CreateException(options, request), retries);
-                        }
-                        yield return new WaitForSeconds(options.RetrySecondsDelay);
+                        options.RetryCallback?.Invoke(CreateException(options, request), retries);
                         retries++;
-                        DebugLog(options.EnableDebug, string.Format("RestClient - Retry Request\nUrl: {0}\nMethod: {1}", options.Uri, options.Method), false);
+                        DebugLog(options.EnableDebug,
+                                 $"RestClient - Retry Request (attempt {retries})\nUrl: {options.Uri}\nMethod: {options.Method}",
+                                 false);
+                        yield return new WaitForSeconds(options.RetrySecondsDelay);
                     }
                     else
                     {
                         var err = CreateException(options, request);
                         DebugLog(options.EnableDebug, err, true);
                         callback(err, response);
-                        break;
+                        yield break;
                     }
                 }
             }
             while (retries <= options.Retries);
+        }
+
+        private static IEnumerator SendUnityWebRequestCoroutine(UnityWebRequest request, RequestHelper options)
+        {
+            var op = request.SendWebRequest();               // <<< core send
+            options.ProgressCallback?.Invoke(0f);
+
+            while (!op.isDone)
+            {
+                options.ProgressCallback?.Invoke(op.progress);
+                yield return null;                            // <<< hand control back to Unity each frame
+            }
+
+            options.ProgressCallback?.Invoke(1f);
         }
 
         private static UnityWebRequest CreateRequest(RequestHelper options)
@@ -116,7 +112,8 @@ namespace Proyecto26
 
         public static IEnumerator DefaultUnityWebRequest<TResponse>(RequestHelper options, Action<RequestException, ResponseHelper, TResponse> callback)
         {
-            return CreateRequestAndRetry(options, (RequestException err, ResponseHelper res) => {
+            return CreateRequestAndRetry(options, (RequestException err, ResponseHelper res) =>
+            {
                 var body = default(TResponse);
                 try
                 {
@@ -137,7 +134,8 @@ namespace Proyecto26
 
         public static IEnumerator DefaultUnityWebRequest<TResponse>(RequestHelper options, Action<RequestException, ResponseHelper, TResponse[]> callback)
         {
-            return CreateRequestAndRetry(options, (RequestException err, ResponseHelper res) => {
+            return CreateRequestAndRetry(options, (RequestException err, ResponseHelper res) =>
+            {
                 var body = default(TResponse[]);
                 try
                 {
@@ -155,6 +153,5 @@ namespace Proyecto26
                 }
             });
         }
-
     }
 }
