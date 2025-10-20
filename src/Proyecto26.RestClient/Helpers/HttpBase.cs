@@ -17,37 +17,54 @@ namespace Proyecto26
             {
                 using (var request = CreateRequest(options))
                 {
-                    // send + drive the request non‑blockingly, frame by frame
-                    yield return SendUnityWebRequestCoroutine(request, options);
+                    var sendRequest = request.SendWebRequestWithOptions(options);
 
-                    // now build the response as before
+                    if (options.ProgressCallback == null)
+                    {
+                        yield return sendRequest;
+                    }
+                    else
+                    {
+                        options.ProgressCallback(0);
+                        while (!sendRequest.isDone)
+                        {
+                            options.ProgressCallback(sendRequest.progress);
+                            yield return null;
+                        }
+                        options.ProgressCallback(1);
+                    }
+
+                    bool isNetworkError;
+#if UNITY_2020_2_OR_NEWER
+                                isNetworkError = request.result == UnityWebRequest.Result.ConnectionError;
+#else
+                    isNetworkError = request.isNetworkError;
+#endif
+
                     var response = request.CreateWebResponse();
 
                     if (request.IsValidRequest(options))
                     {
-                        DebugLog(options.EnableDebug,
-                                 $"RestClient - Response\nUrl: {options.Uri}\nMethod: {options.Method}\nStatus: {request.responseCode}\nResponse: {(options.ParseResponseBody ? response.Text : "body not parsed")}",
-                                 false);
+                        DebugLog(options.EnableDebug, string.Format("RestClient - Response\nUrl: {0}\nMethod: {1}\nStatus: {2}\nResponse: {3}", options.Uri, options.Method, request.responseCode, options.ParseResponseBody ? response.Text : "body not parsed"), false);
                         callback(null, response);
-                        yield break;
+                        break;
                     }
-                    else if (!options.IsAborted
-                             && retries < options.Retries
-                             && (!options.RetryCallbackOnlyOnNetworkErrors || IsNetworkError(request)))
+                    else if (!options.IsAborted && retries < options.Retries && (!options.RetryCallbackOnlyOnNetworkErrors || isNetworkError))
                     {
-                        options.RetryCallback?.Invoke(CreateException(options, request), retries);
-                        retries++;
-                        DebugLog(options.EnableDebug,
-                                 $"RestClient - Retry Request (attempt {retries})\nUrl: {options.Uri}\nMethod: {options.Method}",
-                                 false);
+                        if (options.RetryCallback != null)
+                        {
+                            options.RetryCallback(CreateException(options, request), retries);
+                        }
                         yield return new WaitForSeconds(options.RetrySecondsDelay);
+                        retries++;
+                        DebugLog(options.EnableDebug, string.Format("RestClient - Retry Request\nUrl: {0}\nMethod: {1}", options.Uri, options.Method), false);
                     }
                     else
                     {
                         var err = CreateException(options, request);
                         DebugLog(options.EnableDebug, err, true);
                         callback(err, response);
-                        yield break;
+                        break;
                     }
                 }
             }
@@ -94,15 +111,6 @@ namespace Proyecto26
             IsHttpError = request.isHttpError;
 #endif
             return new RequestException(options, request.error, IsHttpError, IsNetworkError, request.responseCode, options.ParseResponseBody ? request.downloadHandler.text : "body not parsed");
-        }
-
-        private static bool IsNetworkError(UnityWebRequest request)
-        {
-#if UNITY_2020_2_OR_NEWER
-            return request.result == UnityWebRequest.Result.ConnectionError;
-#else
-            return request.isNetworkError;
-#endif
         }
 
         public static void DebugLog(bool debugEnabled, object message, bool isError)
